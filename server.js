@@ -4,6 +4,7 @@ import fs from "fs";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
 import https from "https";
+import path from "path";
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,7 @@ const COOKIES_FILE_PATH = "/tmp/youtube-cookies.txt";
 
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
 const streamCache = new Map();
+const pendingStreamRequests = new Map();
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_KEY environment variables");
@@ -67,9 +69,9 @@ function ytDlpCommonArgs() {
     "--no-playlist",
     "--remote-components", "ejs:github",
     "--extractor-args", "youtube:player_js_variant=tv",
-    "--sleep-requests", "2",
-    "--sleep-interval", "2",
-    "--max-sleep-interval", "5",
+    "--sleep-requests", "1",
+    "--sleep-interval", "1",
+    "--max-sleep-interval", "2",
     "--user-agent",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
   ];
@@ -129,50 +131,58 @@ function cleanupExpiredStreamCache() {
   }
 }
 
+function findDownloadedAudioFile(baseName) {
+  const files = fs.readdirSync(process.cwd());
+  const matched = files.filter((file) => {
+    if (!file.startsWith(`${baseName}.`)) return false;
+    if (file.endsWith(".jpg") || file.endsWith(".jpeg") || file.endsWith(".png") || file.endsWith(".webp")) return false;
+    return true;
+  });
+
+  if (matched.length === 0) return null;
+
+  matched.sort((a, b) => {
+    const aStat = fs.statSync(path.join(process.cwd(), a));
+    const bStat = fs.statSync(path.join(process.cwd(), b));
+    return bStat.mtimeMs - aStat.mtimeMs;
+  });
+
+  return matched[0];
+}
+
+function getContentTypeForExtension(filename) {
+  const ext = path.extname(filename).lowercase?.() ?? path.extname(filename).toLowerCase();
+
+  switch (ext) {
+    case ".m4a":
+      return "audio/mp4";
+    case ".mp4":
+      return "audio/mp4";
+    case ".webm":
+      return "audio/webm";
+    case ".opus":
+      return "audio/ogg";
+    case ".ogg":
+      return "audio/ogg";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".aac":
+      return "audio/aac";
+    case ".wav":
+      return "audio/wav";
+    case ".flac":
+      return "audio/flac";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 app.get("/", (_req, res) => {
   res.json({ ok: true, service: "mytunes-backend" });
 });
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
-});
-
-app.get("/search", async (req, res) => {
-  const { q } = req.query;
-  if (!q) return res.json([]);
-
-  try {
-    console.log("SEARCH request:", q);
-
-    const command = buildCommand([
-      ...ytDlpCommonArgs(),
-      `ytsearch10:${q}`,
-      "--flat-playlist",
-      "--print",
-      "%(title)s|||%(id)s"
-    ]);
-
-    const stdout = await execCommand(command);
-
-    const results = stdout
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [title, id] = line.split("|||");
-        return {
-          title,
-          url: `https://www.youtube.com/watch?v=${id}`,
-          thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
-          id
-        };
-      });
-
-    console.log("SEARCH success:", results.length, "results");
-    res.json(results);
-  } catch (err) {
-    console.error("SEARCH failed:", err.message);
-    res.status(500).json({ error: err.message || "Search failed" });
-  }
 });
 
 app.get("/playlist-tracks", async (req, res) => {
@@ -224,27 +234,42 @@ app.get("/stream", async (req, res) => {
       return res.json({ stream: cached });
     }
 
-    console.log("STREAM request:", url);
-
-    const command = buildCommand([
-      ...ytDlpCommonArgs(),
-      "-f", "ba*/bestaudio*/b",
-      "-g",
-      url
-    ]);
-
-    const stdout = await execCommand(command);
-
-    if (!stdout) {
-      throw new Error("No stream URL returned");
+    if (pendingStreamRequests.has(url)) {
+      console.log("STREAM pending request reused");
+      const pendingStream = await pendingStreamRequests.get(url);
+      return res.json({ stream: pendingStream });
     }
 
-    setCachedStream(url, stdout);
-    cleanupExpiredStreamCache();
+    console.log("STREAM request:", url);
+
+    const promise = (async () => {
+      const command = buildCommand([
+        ...ytDlpCommonArgs(),
+        "-f", "ba*/bestaudio*/b",
+        "-g",
+        url
+      ]);
+
+      const stdout = await execCommand(command);
+
+      if (!stdout) {
+        throw new Error("No stream URL returned");
+      }
+
+      setCachedStream(url, stdout);
+      cleanupExpiredStreamCache();
+      return stdout;
+    })();
+
+    pendingStreamRequests.set(url, promise);
+
+    const stream = await promise;
+    pendingStreamRequests.delete(url);
 
     console.log("STREAM success");
-    res.json({ stream: stdout });
+    res.json({ stream });
   } catch (err) {
+    pendingStreamRequests.delete(url);
     console.error("STREAM failed:", err.message);
     res.status(500).json({ error: err.message || "Stream failed" });
   }
@@ -298,25 +323,27 @@ app.post("/upload-youtube", async (req, res) => {
     console.log("6. Thumbnail URL:", thumbnailUrl || "No thumbnail");
 
     const baseName = `${safeName(videoTitle)}-${Date.now()}`;
-    audioFilename = `${baseName}.mp3`;
+    const outputTemplate = `${baseName}.%(ext)s`;
     imageFilename = `${baseName}.jpg`;
 
-    console.log("7. Downloading MP3:", audioFilename);
+    console.log("7. Downloading original audio format...");
 
     const downloadCommand = buildCommand([
       ...ytDlpCommonArgs(),
-      "-x",
-      "--audio-format", "mp3",
-      "-o", audioFilename,
+      "-f", "ba*/bestaudio*/b",
+      "-o", outputTemplate,
       cleanUrl
     ]);
 
     await execCommand(downloadCommand);
-    console.log("8. MP3 download complete");
 
-    if (!fs.existsSync(audioFilename)) {
-      throw new Error("MP3 not created");
+    audioFilename = findDownloadedAudioFile(baseName);
+
+    if (!audioFilename || !fs.existsSync(audioFilename)) {
+      throw new Error("Audio file not created");
     }
+
+    console.log("8. Audio download complete:", audioFilename);
 
     let coverPath = null;
 
@@ -348,13 +375,15 @@ app.post("/upload-youtube", async (req, res) => {
 
     console.log("12. Reading audio file...");
     const audioBuffer = fs.readFileSync(audioFilename);
-    const audioPath = `songs/${audioFilename}`;
+    const cleanAudioFileName = safeName(audioFilename);
+    const audioPath = `songs/${Date.now()}_${cleanAudioFileName}`;
+    const audioContentType = getContentTypeForExtension(audioFilename);
 
     console.log("13. Uploading audio to Supabase...");
     const { error: uploadError } = await supabase.storage
       .from("music")
       .upload(audioPath, audioBuffer, {
-        contentType: "audio/mpeg",
+        contentType: audioContentType,
         upsert: false
       });
 
