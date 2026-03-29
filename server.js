@@ -47,9 +47,38 @@ function downloadImage(url, filepath) {
           file.close(resolve);
         });
       })
-      .on("error", (error) => {
-        reject(error);
-      });
+      .on("error", (error) => reject(error));
+  });
+}
+
+function ytDlpBaseArgs() {
+  return [
+    "--no-playlist",
+    "--js-runtimes", "node",
+    "--extractor-args", "youtube:player_client=android,web",
+    "--sleep-requests", "2",
+    "--sleep-interval", "2",
+    "--max-sleep-interval", "5"
+  ];
+}
+
+function quote(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+function buildCommand(args) {
+  return `yt-dlp ${args.map(quote).join(" ")}`;
+}
+
+function execCommand(command) {
+  return new Promise((resolve, reject) => {
+    exec(command, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
   });
 }
 
@@ -61,87 +90,106 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/search", (req, res) => {
+app.get("/search", async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json([]);
 
-  console.log("SEARCH request:", q);
+  try {
+    console.log("SEARCH request:", q);
 
-  exec(
-    `yt-dlp "ytsearch10:${q}" --flat-playlist --print "%(title)s|||%(id)s"`,
-    (err, stdout, stderr) => {
-      if (err) {
-        console.error("SEARCH failed:", stderr || err.message);
-        return res.status(500).json({ error: "Search failed" });
-      }
+    const command = buildCommand([
+      `ytsearch10:${q}`,
+      "--flat-playlist",
+      "--print",
+      "%(title)s|||%(id)s"
+    ]);
 
-      const results = stdout
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [title, id] = line.split("|||");
-          return {
-            title,
-            url: `https://www.youtube.com/watch?v=${id}`,
-            thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
-            id
-          };
-        });
+    const stdout = await execCommand(command);
 
-      console.log("SEARCH success:", results.length, "results");
-      res.json(results);
-    }
-  );
+    const results = stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [title, id] = line.split("|||");
+        return {
+          title,
+          url: `https://www.youtube.com/watch?v=${id}`,
+          thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
+          id
+        };
+      });
+
+    console.log("SEARCH success:", results.length, "results");
+    res.json(results);
+  } catch (err) {
+    console.error("SEARCH failed:", err.message);
+    res.status(500).json({ error: err.message || "Search failed" });
+  }
 });
 
-app.get("/stream", (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: "Missing URL" });
-
-  console.log("STREAM request:", url);
-
-  exec(`yt-dlp -f bestaudio -g "${url}"`, (err, stdout, stderr) => {
-    if (err || !stdout) {
-      console.error("STREAM failed:", stderr || err?.message);
-      return res.status(500).json({ error: "Stream failed" });
-    }
-
-    console.log("STREAM success");
-    res.json({ stream: stdout.trim() });
-  });
-});
-
-app.get("/playlist-tracks", (req, res) => {
+app.get("/playlist-tracks", async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "Missing playlist URL" });
 
-  console.log("PLAYLIST request:", url);
+  try {
+    console.log("PLAYLIST request:", url);
 
-  exec(
-    `yt-dlp --flat-playlist --print "%(title)s|||%(id)s" "${url}"`,
-    (err, stdout, stderr) => {
-      if (err) {
-        console.error("PLAYLIST failed:", stderr || err.message);
-        return res.status(500).json({ error: "Playlist fetch failed" });
-      }
+    const command = buildCommand([
+      url,
+      "--flat-playlist",
+      "--print",
+      "%(title)s|||%(id)s"
+    ]);
 
-      const results = stdout
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [title, id] = line.split("|||");
-          return {
-            title,
-            url: `https://www.youtube.com/watch?v=${id}`,
-            thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
-            id
-          };
-        });
+    const stdout = await execCommand(command);
 
-      console.log("PLAYLIST success:", results.length, "tracks");
-      res.json(results);
+    const results = stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [title, id] = line.split("|||");
+        return {
+          title,
+          url: `https://www.youtube.com/watch?v=${id}`,
+          thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
+          id
+        };
+      });
+
+    console.log("PLAYLIST success:", results.length, "tracks");
+    res.json(results);
+  } catch (err) {
+    console.error("PLAYLIST failed:", err.message);
+    res.status(500).json({ error: err.message || "Playlist fetch failed" });
+  }
+});
+
+app.get("/stream", async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: "Missing URL" });
+
+  try {
+    console.log("STREAM request:", url);
+
+    const command = buildCommand([
+      ...ytDlpBaseArgs(),
+      "-f", "bestaudio",
+      "-g",
+      url
+    ]);
+
+    const stdout = await execCommand(command);
+
+    if (!stdout) {
+      throw new Error("No stream URL returned");
     }
-  );
+
+    console.log("STREAM success");
+    res.json({ stream: stdout });
+  } catch (err) {
+    console.error("STREAM failed:", err.message);
+    res.status(500).json({ error: err.message || "Stream failed" });
+  }
 });
 
 app.post("/upload-youtube", async (req, res) => {
@@ -164,31 +212,31 @@ app.post("/upload-youtube", async (req, res) => {
     let thumbnailUrl = "";
 
     console.log("3. Getting title...");
-    await new Promise((resolve) => {
-      exec(`yt-dlp --get-title "${cleanUrl}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error("Title fetch error:", stderr || err.message);
-        }
-        if (!err && stdout) {
-          videoTitle = stdout.trim();
-        }
-        resolve();
-      });
-    });
+    try {
+      const titleCommand = buildCommand([
+        ...ytDlpBaseArgs(),
+        "--get-title",
+        cleanUrl
+      ]);
+      const stdout = await execCommand(titleCommand);
+      if (stdout) videoTitle = stdout;
+    } catch (err) {
+      console.error("Title fetch error:", err.message);
+    }
     console.log("4. Title:", videoTitle);
 
     console.log("5. Getting thumbnail...");
-    await new Promise((resolve) => {
-      exec(`yt-dlp --get-thumbnail "${cleanUrl}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error("Thumbnail fetch error:", stderr || err.message);
-        }
-        if (!err && stdout) {
-          thumbnailUrl = stdout.trim();
-        }
-        resolve();
-      });
-    });
+    try {
+      const thumbCommand = buildCommand([
+        ...ytDlpBaseArgs(),
+        "--get-thumbnail",
+        cleanUrl
+      ]);
+      const stdout = await execCommand(thumbCommand);
+      if (stdout) thumbnailUrl = stdout;
+    } catch (err) {
+      console.error("Thumbnail fetch error:", err.message);
+    }
     console.log("6. Thumbnail URL:", thumbnailUrl || "No thumbnail");
 
     const baseName = `${safeName(videoTitle)}-${Date.now()}`;
@@ -196,20 +244,17 @@ app.post("/upload-youtube", async (req, res) => {
     imageFilename = `${baseName}.jpg`;
 
     console.log("7. Downloading MP3:", audioFilename);
-    await new Promise((resolve, reject) => {
-      exec(
-        `yt-dlp --no-playlist -x --audio-format mp3 -o "${audioFilename}" "${cleanUrl}"`,
-        (error, _stdout, stderr) => {
-          if (error) {
-            console.error("MP3 download error:", stderr || error.message);
-            reject(new Error(stderr || error.message));
-          } else {
-            console.log("8. MP3 download complete");
-            resolve();
-          }
-        }
-      );
-    });
+
+    const downloadCommand = buildCommand([
+      ...ytDlpBaseArgs(),
+      "-x",
+      "--audio-format", "mp3",
+      "-o", audioFilename,
+      cleanUrl
+    ]);
+
+    await execCommand(downloadCommand);
+    console.log("8. MP3 download complete");
 
     if (!fs.existsSync(audioFilename)) {
       throw new Error("MP3 not created");
@@ -238,8 +283,6 @@ app.post("/upload-youtube", async (req, res) => {
           coverPath = `covers/${imageFilename}`;
           console.log("11. Thumbnail uploaded:", coverPath);
         }
-      } else {
-        console.log("10. Thumbnail file was not created");
       }
     } else {
       console.log("9. Skipping thumbnail download");
@@ -284,7 +327,7 @@ app.post("/upload-youtube", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("UPLOAD error:", err);
+    console.error("UPLOAD error:", err.message);
     res.status(500).json({
       error: err.message || "Upload failed"
     });
