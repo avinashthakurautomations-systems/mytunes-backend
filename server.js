@@ -226,29 +226,14 @@ app.get("/stream", async (req, res) => {
 
     console.log("STREAM request:", url);
 
-    let stdout = "";
+    const command = buildCommand([
+      ...ytDlpCommonArgs(),
+      "-f", "b",
+      "-g",
+      url
+    ]);
 
-    try {
-      const primaryCommand = buildCommand([
-        ...ytDlpCommonArgs(),
-        "-f", "ba*/bestaudio*/b",
-        "-g",
-        url
-      ]);
-
-      stdout = await execCommand(primaryCommand);
-    } catch (primaryError) {
-      console.log("Primary stream format failed, trying fallback:", primaryError.message);
-
-      const fallbackCommand = buildCommand([
-        ...ytDlpCommonArgs(),
-        "-f", "b",
-        "-g",
-        url
-      ]);
-
-      stdout = await execCommand(fallbackCommand);
-    }
+    const stdout = await execCommand(command);
 
     if (!stdout) {
       throw new Error("No stream URL returned");
