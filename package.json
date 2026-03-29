@@ -1,0 +1,18 @@
+{
+  "name": "mytunes-search-website",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "MyTunes backend for YouTube search, stream, and upload",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.100.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}

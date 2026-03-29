@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MyTunes Search & Upload</title>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0b0714;
+      color: #fff;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: auto;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      margin-top: 20px;
+      background: #1c1529;
+      color: white;
+    }
+
+    .results {
+      margin-top: 20px;
+      display: grid;
+      gap: 15px;
+    }
+
+    .card {
+      display: flex;
+      gap: 15px;
+      background: #15101f;
+      padding: 10px;
+      border-radius: 12px;
+      align-items: center;
+    }
+
+    img {
+      width: 120px;
+      border-radius: 10px;
+    }
+
+    .title {
+      font-weight: bold;
+      cursor: pointer;
+      color: #8b5cf6;
+    }
+
+    button {
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: none;
+      background: #8b5cf6;
+      color: white;
+      cursor: pointer;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+  <h1>🎵 MyTunes YouTube Search</h1>
+
+  <input id="searchInput" placeholder="Search songs..." />
+
+  <div id="results" class="results"></div>
+</div>
+
+<script>
+const BACKEND = "http://localhost:3000";
+
+let debounceTimer = null;
+let currentAudio = null;
+
+// 🔍 Live search
+document.getElementById("searchInput").addEventListener("input", (e) => {
+  const query = e.target.value;
+
+  clearTimeout(debounceTimer);
+
+  debounceTimer = setTimeout(() => {
+    if (query.trim()) {
+      search(query);
+    } else {
+      document.getElementById("results").innerHTML = "";
+    }
+  }, 400);
+});
+
+// 🔍 Fetch results
+async function search(query) {
+  const container = document.getElementById("results");
+
+  container.innerHTML = `<div class="status">🔍 Searching...</div>`;
+
+  try {
+    const res = await fetch(`${BACKEND}/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    container.innerHTML = "";
+
+    if (!data.length) {
+      container.innerHTML = `<div class="status">❌ No results found</div>`;
+      return;
+    }
+
+    data.forEach(item => {
+      const div = document.createElement("div");
+      div.className = "card";
+
+      div.innerHTML = `
+        <img src="${item.thumbnail}" />
+
+        <div style="flex:1">
+          
+          <!-- 🎧 CLICK TO PLAY -->
+          <div class="title"
+               onclick="playSong('${item.url}', this)">
+            ${item.title}
+          </div>
+
+          <button onclick="upload('${item.url}', this)">
+            Upload This Song
+          </button>
+
+          <div class="status"></div>
+        </div>
+      `;
+
+      container.appendChild(div);
+    });
+
+  } catch (err) {
+    container.innerHTML = `<div class="status">❌ Error fetching results</div>`;
+  }
+}
+
+// 🎧 Play music
+async function playSong(url, element) {
+  try {
+    // Stop previous
+    if (currentAudio) currentAudio.pause();
+
+    element.innerText = "⏳ Loading...";
+
+    const res = await fetch(`${BACKEND}/stream?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+
+    currentAudio = new Audio(data.stream);
+    currentAudio.play();
+
+    currentAudio.onplaying = () => {
+      element.innerText = element.getAttribute("data-title") || element.innerText;
+    };
+
+  } catch (err) {
+    element.innerText = "❌ Failed";
+  }
+}
+
+// 🚀 Upload
+async function upload(url, btn) {
+  const status = btn.nextElementSibling;
+  status.innerText = "Uploading...";
+
+  try {
+    const res = await fetch(`${BACKEND}/upload-youtube`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ url })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      status.innerText = "✅ Uploaded!";
+    } else {
+      status.innerText = "❌ Failed";
+    }
+
+  } catch (err) {
+    status.innerText = "❌ Error";
+  }
+}
+</script>
+
+</body>
+</html>
