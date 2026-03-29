@@ -10,6 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const COOKIES_FILE_PATH = "/tmp/youtube-cookies.txt";
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_KEY environment variables");
@@ -19,6 +20,13 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
+
+if (process.env.YTDLP_COOKIES) {
+  fs.writeFileSync(COOKIES_FILE_PATH, process.env.YTDLP_COOKIES, "utf8");
+  console.log("YouTube cookies file created");
+} else {
+  console.log("YTDLP_COOKIES not set");
+}
 
 function safeName(name) {
   return name
@@ -51,15 +59,23 @@ function downloadImage(url, filepath) {
   });
 }
 
-function ytDlpBaseArgs() {
-  return [
+function ytDlpCommonArgs() {
+  const args = [
     "--no-playlist",
     "--js-runtimes", "node",
     "--extractor-args", "youtube:player_client=android,web",
     "--sleep-requests", "2",
     "--sleep-interval", "2",
-    "--max-sleep-interval", "5"
+    "--max-sleep-interval", "5",
+    "--user-agent",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
   ];
+
+  if (fs.existsSync(COOKIES_FILE_PATH)) {
+    args.push("--cookies", COOKIES_FILE_PATH);
+  }
+
+  return args;
 }
 
 function quote(value) {
@@ -98,6 +114,7 @@ app.get("/search", async (req, res) => {
     console.log("SEARCH request:", q);
 
     const command = buildCommand([
+      ...ytDlpCommonArgs(),
       `ytsearch10:${q}`,
       "--flat-playlist",
       "--print",
@@ -135,6 +152,7 @@ app.get("/playlist-tracks", async (req, res) => {
     console.log("PLAYLIST request:", url);
 
     const command = buildCommand([
+      ...ytDlpCommonArgs(),
       url,
       "--flat-playlist",
       "--print",
@@ -172,7 +190,7 @@ app.get("/stream", async (req, res) => {
     console.log("STREAM request:", url);
 
     const command = buildCommand([
-      ...ytDlpBaseArgs(),
+      ...ytDlpCommonArgs(),
       "-f", "bestaudio",
       "-g",
       url
@@ -214,7 +232,7 @@ app.post("/upload-youtube", async (req, res) => {
     console.log("3. Getting title...");
     try {
       const titleCommand = buildCommand([
-        ...ytDlpBaseArgs(),
+        ...ytDlpCommonArgs(),
         "--get-title",
         cleanUrl
       ]);
@@ -228,7 +246,7 @@ app.post("/upload-youtube", async (req, res) => {
     console.log("5. Getting thumbnail...");
     try {
       const thumbCommand = buildCommand([
-        ...ytDlpBaseArgs(),
+        ...ytDlpCommonArgs(),
         "--get-thumbnail",
         cleanUrl
       ]);
@@ -246,7 +264,7 @@ app.post("/upload-youtube", async (req, res) => {
     console.log("7. Downloading MP3:", audioFilename);
 
     const downloadCommand = buildCommand([
-      ...ytDlpBaseArgs(),
+      ...ytDlpCommonArgs(),
       "-x",
       "--audio-format", "mp3",
       "-o", audioFilename,
