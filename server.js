@@ -111,6 +111,39 @@ app.get("/stream", (req, res) => {
   });
 });
 
+app.get("/playlist-tracks", (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: "Missing playlist URL" });
+
+  console.log("PLAYLIST request:", url);
+
+  exec(
+    `yt-dlp --flat-playlist --print "%(title)s|||%(id)s" "${url}"`,
+    (err, stdout, stderr) => {
+      if (err) {
+        console.error("PLAYLIST failed:", stderr || err.message);
+        return res.status(500).json({ error: "Playlist fetch failed" });
+      }
+
+      const results = stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [title, id] = line.split("|||");
+          return {
+            title,
+            url: `https://www.youtube.com/watch?v=${id}`,
+            thumbnail: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
+            id
+          };
+        });
+
+      console.log("PLAYLIST success:", results.length, "tracks");
+      res.json(results);
+    }
+  );
+});
+
 app.post("/upload-youtube", async (req, res) => {
   const { url } = req.body;
 
