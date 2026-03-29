@@ -12,6 +12,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const COOKIES_FILE_PATH = "/tmp/youtube-cookies.txt";
 
+const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+const streamCache = new Map();
+
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_KEY environment variables");
 }
@@ -96,6 +99,34 @@ function execCommand(command) {
       }
     });
   });
+}
+
+function getCachedStream(url) {
+  const entry = streamCache.get(url);
+  if (!entry) return null;
+
+  if (entry.expiresAt <= Date.now()) {
+    streamCache.delete(url);
+    return null;
+  }
+
+  return entry.stream;
+}
+
+function setCachedStream(url, stream) {
+  streamCache.set(url, {
+    stream,
+    expiresAt: Date.now() + STREAM_CACHE_TTL_MS
+  });
+}
+
+function cleanupExpiredStreamCache() {
+  const now = Date.now();
+  for (const [key, value] of streamCache.entries()) {
+    if (value.expiresAt <= now) {
+      streamCache.delete(key);
+    }
+  }
 }
 
 app.get("/", (_req, res) => {
@@ -187,11 +218,17 @@ app.get("/stream", async (req, res) => {
   if (!url) return res.status(400).json({ error: "Missing URL" });
 
   try {
+    const cached = getCachedStream(url);
+    if (cached) {
+      console.log("STREAM cache hit");
+      return res.json({ stream: cached });
+    }
+
     console.log("STREAM request:", url);
 
     const command = buildCommand([
       ...ytDlpCommonArgs(),
-      "-f", "bestaudio/best",
+      "-f", "ba*/bestaudio*/b",
       "-g",
       url
     ]);
@@ -201,6 +238,9 @@ app.get("/stream", async (req, res) => {
     if (!stdout) {
       throw new Error("No stream URL returned");
     }
+
+    setCachedStream(url, stdout);
+    cleanupExpiredStreamCache();
 
     console.log("STREAM success");
     res.json({ stream: stdout });
@@ -265,7 +305,6 @@ app.post("/upload-youtube", async (req, res) => {
 
     const downloadCommand = buildCommand([
       ...ytDlpCommonArgs(),
-      "-f", "bestaudio/best",
       "-x",
       "--audio-format", "mp3",
       "-o", audioFilename,
