@@ -62,8 +62,9 @@ function downloadImage(url, filepath) {
 function ytDlpCommonArgs() {
   const args = [
     "--no-playlist",
-    "--js-runtimes", "node",
-    "--extractor-args", "youtube:player_client=android,web",
+    "--extractor-args", "youtube:player_client=web",
+    "--js-runtimes", "deno,node",
+    "--remote-components", "ejs:github",
     "--sleep-requests", "2",
     "--sleep-interval", "2",
     "--max-sleep-interval", "5",

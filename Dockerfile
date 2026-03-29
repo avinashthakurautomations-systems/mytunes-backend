@@ -7,9 +7,14 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     ffmpeg \
     ca-certificates \
+    curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV PATH="/root/.deno/bin:${PATH}"
+
+RUN pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]"
 
 COPY package*.json ./
 RUN npm install
