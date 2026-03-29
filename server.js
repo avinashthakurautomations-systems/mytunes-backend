@@ -63,7 +63,7 @@ function ytDlpCommonArgs() {
   const args = [
     "--no-playlist",
     "--remote-components", "ejs:github",
-    "--extractor-args", "youtube:player_client=web",
+    "--extractor-args", "youtube:player_js_variant=tv",
     "--sleep-requests", "2",
     "--sleep-interval", "2",
     "--max-sleep-interval", "5",
@@ -191,7 +191,7 @@ app.get("/stream", async (req, res) => {
 
     const command = buildCommand([
       ...ytDlpCommonArgs(),
-      "-f", "bestaudio",
+      "-f", "bestaudio/best",
       "-g",
       url
     ]);
@@ -265,6 +265,7 @@ app.post("/upload-youtube", async (req, res) => {
 
     const downloadCommand = buildCommand([
       ...ytDlpCommonArgs(),
+      "-f", "bestaudio/best",
       "-x",
       "--audio-format", "mp3",
       "-o", audioFilename,
