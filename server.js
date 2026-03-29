@@ -14,7 +14,6 @@ const COOKIES_FILE_PATH = "/tmp/youtube-cookies.txt";
 
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
 const streamCache = new Map();
-const pendingStreamRequests = new Map();
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_KEY environment variables");
@@ -68,9 +67,9 @@ function ytDlpCommonArgs() {
     "--no-playlist",
     "--remote-components", "ejs:github",
     "--extractor-args", "youtube:player_js_variant=tv",
-    "--sleep-requests", "1",
-    "--sleep-interval", "1",
-    "--max-sleep-interval", "2",
+    "--sleep-requests", "2",
+    "--sleep-interval", "2",
+    "--max-sleep-interval", "5",
     "--user-agent",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
   ];
@@ -225,42 +224,27 @@ app.get("/stream", async (req, res) => {
       return res.json({ stream: cached });
     }
 
-    if (pendingStreamRequests.has(url)) {
-      console.log("STREAM pending request reused");
-      const pendingStream = await pendingStreamRequests.get(url);
-      return res.json({ stream: pendingStream });
-    }
-
     console.log("STREAM request:", url);
 
-    const promise = (async () => {
-      const command = buildCommand([
-        ...ytDlpCommonArgs(),
-        "-f", "ba*/bestaudio*/b",
-        "-g",
-        url
-      ]);
+    const command = buildCommand([
+      ...ytDlpCommonArgs(),
+      "-f", "ba*/bestaudio*/b",
+      "-g",
+      url
+    ]);
 
-      const stdout = await execCommand(command);
+    const stdout = await execCommand(command);
 
-      if (!stdout) {
-        throw new Error("No stream URL returned");
-      }
+    if (!stdout) {
+      throw new Error("No stream URL returned");
+    }
 
-      setCachedStream(url, stdout);
-      cleanupExpiredStreamCache();
-      return stdout;
-    })();
-
-    pendingStreamRequests.set(url, promise);
-
-    const stream = await promise;
-    pendingStreamRequests.delete(url);
+    setCachedStream(url, stdout);
+    cleanupExpiredStreamCache();
 
     console.log("STREAM success");
-    res.json({ stream });
+    res.json({ stream: stdout });
   } catch (err) {
-    pendingStreamRequests.delete(url);
     console.error("STREAM failed:", err.message);
     res.status(500).json({ error: err.message || "Stream failed" });
   }
